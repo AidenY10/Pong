@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neon Nebula Pong</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Orbitron", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: radial-gradient(circle at center, #0b0f1f 0%, #040612 55%, #010108 100%);
+        color: #eef1ff;
+        height: 100vh;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      canvas {
+        width: min(90vw, 1200px);
+        aspect-ratio: 16 / 9;
+        border: 3px solid rgba(148, 0, 255, 0.35);
+        border-radius: 18px;
+        box-shadow: 0 0 45px rgba(98, 0, 255, 0.4), 0 0 120px rgba(0, 255, 255, 0.1);
+        background: radial-gradient(circle at center, rgba(28, 0, 40, 0.95) 0%, rgba(7, 0, 24, 0.92) 40%, rgba(2, 0, 11, 0.85) 100%);
+      }
+
+      .hud {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(90vw, 1200px);
+        pointer-events: none;
+        display: flex;
+        justify-content: space-between;
+        font-size: clamp(1rem, 2.3vw, 2.3rem);
+        text-shadow: 0 0 10px rgba(0, 255, 255, 0.7), 0 0 20px rgba(98, 0, 255, 0.7);
+        letter-spacing: 0.3em;
+      }
+
+      .hud span {
+        flex: 1;
+        text-align: center;
+      }
+
+      .hud span:first-child {
+        text-align: left;
+      }
+
+      .hud span:last-child {
+        text-align: right;
+      }
+
+      .instructions {
+        position: absolute;
+        bottom: clamp(12px, 3vh, 32px);
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: clamp(0.8rem, 1.8vw, 1.2rem);
+        color: rgba(224, 238, 255, 0.75);
+        text-shadow: 0 0 8px rgba(0, 255, 255, 0.6);
+        letter-spacing: 0.2em;
+      }
+
+      .signature {
+        position: absolute;
+        top: clamp(10px, 5vh, 40px);
+        right: clamp(12px, 5vw, 70px);
+        font-size: clamp(0.6rem, 1.4vw, 1rem);
+        opacity: 0.7;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="gameCanvas" width="1280" height="720"></canvas>
+    <div class="hud">
+      <span id="leftScore">00</span>
+      <span>NEON NEBULA</span>
+      <span id="rightScore">00</span>
+    </div>
+    <div class="instructions">Move your paddle with the mouse or arrow keys</div>
+    <div class="signature">COSMIC PONG EDITION</div>
+
+    <script>
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+      const leftScoreEl = document.getElementById("leftScore");
+      const rightScoreEl = document.getElementById("rightScore");
+
+      const config = {
+        paddleHeight: 160,
+        paddleWidth: 16,
+        paddleGlow: "rgba(0, 255, 255, 0.65)",
+        ballRadius: 14,
+        ballGlow: "rgba(255, 0, 170, 0.65)",
+        maxBallSpeed: 16,
+        baseBallSpeed: 8,
+        particleCount: 80,
+        aiLag: 0.22,
+      };
+
+      const state = {
+        player: { x: 40, y: canvas.height / 2 - config.paddleHeight / 2, vy: 0 },
+        ai: { x: canvas.width - 40 - config.paddleWidth, y: canvas.height / 2 - config.paddleHeight / 2, vy: 0 },
+        ball: { x: canvas.width / 2, y: canvas.height / 2, vx: config.baseBallSpeed, vy: config.baseBallSpeed * 0.3 },
+        scores: { left: 0, right: 0 },
+        particles: [],
+        time: 0,
+        keys: { ArrowUp: false, ArrowDown: false },
+      };
+
+      function resetBall(direction = 1) {
+        state.ball.x = canvas.width / 2;
+        state.ball.y = canvas.height / 2;
+        const angle = (Math.random() * Math.PI) / 3 - Math.PI / 6;
+        const speed = config.baseBallSpeed + Math.random() * 2;
+        state.ball.vx = Math.cos(angle) * speed * direction;
+        state.ball.vy = Math.sin(angle) * speed;
+      }
+
+      function updateScores() {
+        leftScoreEl.textContent = state.scores.left.toString().padStart(2, "0");
+        rightScoreEl.textContent = state.scores.right.toString().padStart(2, "0");
+      }
+
+      function clamp(val, min, max) {
+        return Math.max(min, Math.min(max, val));
+      }
+
+      function addParticles(x, y, color) {
+        for (let i = 0; i < 6; i++) {
+          state.particles.push({
+            x,
+            y,
+            life: 1,
+            vx: (Math.random() - 0.5) * 4,
+            vy: (Math.random() - 0.5) * 4,
+            color,
+          });
+        }
+        if (state.particles.length > config.particleCount) {
+          state.particles.splice(0, state.particles.length - config.particleCount);
+        }
+      }
+
+      function handleInput(delta) {
+        const speed = 620 * delta;
+        if (state.keys.ArrowUp) state.player.y -= speed;
+        if (state.keys.ArrowDown) state.player.y += speed;
+        state.player.y = clamp(state.player.y, 20, canvas.height - config.paddleHeight - 20);
+      }
+
+      let pointerY = state.player.y + config.paddleHeight / 2;
+      canvas.addEventListener("pointermove", (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const y = event.clientY - rect.top;
+        pointerY = clamp(y - config.paddleHeight / 2, 20, canvas.height - config.paddleHeight - 20);
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key in state.keys) state.keys[event.key] = true;
+      });
+
+      window.addEventListener("keyup", (event) => {
+        if (event.key in state.keys) state.keys[event.key] = false;
+      });
+
+      function update(delta) {
+        state.time += delta;
+        handleInput(delta);
+
+        // Smoothly move towards pointer control
+        state.player.y += (pointerY - state.player.y) * 0.18;
+
+        const ball = state.ball;
+        ball.x += ball.vx;
+        ball.y += ball.vy;
+
+        // Wall collision
+        if (ball.y < config.ballRadius + 10 || ball.y > canvas.height - config.ballRadius - 10) {
+          ball.vy *= -1;
+          addParticles(ball.x, clamp(ball.y, config.ballRadius + 10, canvas.height - config.ballRadius - 10), "rgba(0, 255, 200, 0.6)");
+        }
+
+        // Player paddle collision
+        if (
+          ball.x - config.ballRadius < state.player.x + config.paddleWidth &&
+          ball.x - config.ballRadius > state.player.x &&
+          ball.y > state.player.y &&
+          ball.y < state.player.y + config.paddleHeight
+        ) {
+          const relative = (ball.y - (state.player.y + config.paddleHeight / 2)) / (config.paddleHeight / 2);
+          ball.vx = Math.abs(ball.vx) * 1.05;
+          ball.vx = clamp(ball.vx, 6, config.maxBallSpeed);
+          ball.vy = relative * config.maxBallSpeed * 0.7;
+          addParticles(ball.x, ball.y, "rgba(255, 0, 170, 0.75)");
+        }
+
+        // AI paddle movement
+        const targetY = ball.y - config.paddleHeight / 2 + Math.sin(state.time * 1.7) * 35;
+        state.ai.y += (targetY - state.ai.y) * config.aiLag;
+        state.ai.y = clamp(state.ai.y, 20, canvas.height - config.paddleHeight - 20);
+
+        // AI paddle collision
+        if (
+          ball.x + config.ballRadius > state.ai.x &&
+          ball.x + config.ballRadius < state.ai.x + config.paddleWidth &&
+          ball.y > state.ai.y &&
+          ball.y < state.ai.y + config.paddleHeight
+        ) {
+          const relative = (ball.y - (state.ai.y + config.paddleHeight / 2)) / (config.paddleHeight / 2);
+          ball.vx = -Math.abs(ball.vx) * 1.05;
+          ball.vx = clamp(ball.vx, -config.maxBallSpeed, -6);
+          ball.vy = relative * config.maxBallSpeed * 0.75;
+          addParticles(ball.x, ball.y, "rgba(0, 220, 255, 0.75)");
+        }
+
+        // Scoring
+        if (ball.x < -config.ballRadius) {
+          state.scores.right += 1;
+          updateScores();
+          resetBall(1);
+        } else if (ball.x > canvas.width + config.ballRadius) {
+          state.scores.left += 1;
+          updateScores();
+          resetBall(-1);
+        }
+
+        // Update particles
+        state.particles = state.particles
+          .map((particle) => ({
+            ...particle,
+            life: particle.life - delta * 2,
+            x: particle.x + particle.vx,
+            y: particle.y + particle.vy,
+            vx: particle.vx * 0.96,
+            vy: particle.vy * 0.96,
+          }))
+          .filter((particle) => particle.life > 0);
+      }
+
+      function drawBackground(time) {
+        const gradient = ctx.createRadialGradient(
+          canvas.width / 2 + Math.sin(time * 0.2) * 180,
+          canvas.height / 2 + Math.cos(time * 0.25) * 180,
+          40,
+          canvas.width / 2,
+          canvas.height / 2,
+          canvas.width * 0.75
+        );
+        gradient.addColorStop(0, "rgba(255, 0, 255, 0.12)");
+        gradient.addColorStop(0.3, "rgba(0, 255, 255, 0.07)");
+        gradient.addColorStop(0.6, "rgba(13, 0, 40, 0.35)");
+        gradient.addColorStop(1, "rgba(3, 0, 14, 0.9)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw plasma waves
+        const waveCount = 3;
+        for (let i = 0; i < waveCount; i++) {
+          const hue = (time * 30 + i * 120) % 360;
+          ctx.strokeStyle = `hsla(${hue}, 90%, 60%, 0.12)`;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          for (let x = 0; x < canvas.width; x += 12) {
+            const y =
+              canvas.height / 2 +
+              Math.sin(time * 0.9 + x * 0.018 + i) * 70 +
+              Math.cos(time * 0.5 + x * 0.02 + i) * 30;
+            ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+      }
+
+      function drawPaddle(paddle, glowColor) {
+        ctx.save();
+        const gradient = ctx.createLinearGradient(0, paddle.y, 0, paddle.y + config.paddleHeight);
+        gradient.addColorStop(0, "rgba(0, 255, 255, 0.9)");
+        gradient.addColorStop(0.5, "rgba(255, 0, 255, 0.9)");
+        gradient.addColorStop(1, "rgba(255, 255, 255, 0.9)");
+        ctx.shadowBlur = 30;
+        ctx.shadowColor = glowColor;
+        ctx.fillStyle = gradient;
+        ctx.fillRect(paddle.x, paddle.y, config.paddleWidth, config.paddleHeight);
+        ctx.restore();
+      }
+
+      function drawBall(ball) {
+        ctx.save();
+        const gradient = ctx.createRadialGradient(ball.x, ball.y, 2, ball.x, ball.y, config.ballRadius * 1.4);
+        gradient.addColorStop(0, "rgba(255, 255, 255, 1)");
+        gradient.addColorStop(0.4, "rgba(255, 80, 200, 0.9)");
+        gradient.addColorStop(1, "rgba(80, 255, 255, 0)");
+        ctx.shadowBlur = 25;
+        ctx.shadowColor = config.ballGlow;
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, config.ballRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawParticles() {
+        for (const particle of state.particles) {
+          ctx.save();
+          ctx.globalAlpha = particle.life;
+          ctx.fillStyle = particle.color;
+          ctx.beginPath();
+          ctx.arc(particle.x, particle.y, 6 * particle.life, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      let lastTime = performance.now();
+      function loop(timestamp) {
+        const delta = Math.min((timestamp - lastTime) / 1000, 0.033);
+        lastTime = timestamp;
+
+        update(delta);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawBackground(state.time);
+        drawParticles();
+        drawPaddle(state.player, config.paddleGlow);
+        drawPaddle(state.ai, "rgba(255, 0, 255, 0.7)");
+        drawBall(state.ball);
+
+        // Midline with glow
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+        ctx.lineWidth = 4;
+        ctx.setLineDash([20, 25]);
+        ctx.beginPath();
+        ctx.moveTo(canvas.width / 2, 20);
+        ctx.lineTo(canvas.width / 2, canvas.height - 20);
+        ctx.stroke();
+        ctx.restore();
+
+        requestAnimationFrame(loop);
+      }
+
+      updateScores();
+      requestAnimationFrame(loop);
+    </script>
+  </body>
+</html>
