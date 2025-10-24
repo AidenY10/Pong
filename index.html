@@ -81,6 +81,46 @@
         letter-spacing: 0.2em;
         text-transform: uppercase;
       }
+
+      .pause-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(3px);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+
+      .pause-overlay.active {
+        display: flex;
+      }
+
+      .pause-content {
+        text-align: center;
+        color: #eef1ff;
+      }
+
+      .pause-button {
+        font-size: clamp(2rem, 4vw, 4rem);
+        font-family: "Orbitron", monospace;
+        color: rgba(0, 255, 255, 0.9);
+        text-shadow: 0 0 20px rgba(0, 255, 255, 0.8), 0 0 40px rgba(98, 0, 255, 0.6);
+        letter-spacing: 0.2em;
+        margin-bottom: 1rem;
+        text-transform: uppercase;
+      }
+
+      .pause-instruction {
+        font-size: clamp(1rem, 2vw, 1.5rem);
+        color: rgba(224, 238, 255, 0.8);
+        text-shadow: 0 0 10px rgba(0, 255, 255, 0.6);
+        letter-spacing: 0.1em;
+      }
     </style>
   </head>
   <body>
@@ -90,14 +130,22 @@
       <span>NEON NEBULA</span>
       <span id="rightScore">00</span>
     </div>
-    <div class="instructions">Move your paddle with the mouse or arrow keys</div>
+    <div class="instructions">Move your paddle with the mouse • Press SPACE to pause</div>
     <div class="signature">COSMIC PONG EDITION</div>
+    
+    <div class="pause-overlay" id="pauseOverlay">
+      <div class="pause-content">
+        <div class="pause-button">⏸ PAUSED</div>
+        <div class="pause-instruction">Press SPACE to resume</div>
+      </div>
+    </div>
 
     <script>
       const canvas = document.getElementById("gameCanvas");
       const ctx = canvas.getContext("2d");
       const leftScoreEl = document.getElementById("leftScore");
       const rightScoreEl = document.getElementById("rightScore");
+      const pauseOverlay = document.getElementById("pauseOverlay");
 
       const config = {
         paddleHeight: 160,
@@ -105,8 +153,8 @@
         paddleGlow: "rgba(0, 255, 255, 0.65)",
         ballRadius: 14,
         ballGlow: "rgba(255, 0, 170, 0.65)",
-        maxBallSpeed: 16,
-        baseBallSpeed: 8,
+        maxBallSpeed: 10,
+        baseBallSpeed: 4,
         particleCount: 80,
         aiLag: 0.22,
       };
@@ -118,7 +166,11 @@
         scores: { left: 0, right: 0 },
         particles: [],
         time: 0,
-        keys: { ArrowUp: false, ArrowDown: false },
+        paused: false,
+        aiFatigue: 0,
+        rallyStartTime: 0,
+        windTunnel: { active: false, startTime: 0, direction: 1, strength: 0, x: 0 },
+        lastWindTunnelTime: 0,
       };
 
       function resetBall(direction = 1) {
@@ -128,11 +180,23 @@
         const speed = config.baseBallSpeed + Math.random() * 2;
         state.ball.vx = Math.cos(angle) * speed * direction;
         state.ball.vy = Math.sin(angle) * speed;
+        // Reset AI fatigue at the start of each rally
+        state.aiFatigue = 0;
+        state.rallyStartTime = state.time;
       }
 
       function updateScores() {
         leftScoreEl.textContent = state.scores.left.toString().padStart(2, "0");
         rightScoreEl.textContent = state.scores.right.toString().padStart(2, "0");
+      }
+
+      function togglePause() {
+        state.paused = !state.paused;
+        if (state.paused) {
+          pauseOverlay.classList.add('active');
+        } else {
+          pauseOverlay.classList.remove('active');
+        }
       }
 
       function clamp(val, min, max) {
@@ -155,12 +219,6 @@
         }
       }
 
-      function handleInput(delta) {
-        const speed = 620 * delta;
-        if (state.keys.ArrowUp) state.player.y -= speed;
-        if (state.keys.ArrowDown) state.player.y += speed;
-        state.player.y = clamp(state.player.y, 20, canvas.height - config.paddleHeight - 20);
-      }
 
       let pointerY = state.player.y + config.paddleHeight / 2;
       canvas.addEventListener("pointermove", (event) => {
@@ -170,21 +228,28 @@
       });
 
       window.addEventListener("keydown", (event) => {
-        if (event.key in state.keys) state.keys[event.key] = true;
-      });
-
-      window.addEventListener("keyup", (event) => {
-        if (event.key in state.keys) state.keys[event.key] = false;
+        if (event.key === ' ') {
+          event.preventDefault();
+          togglePause();
+        }
       });
 
       function update(delta) {
         state.time += delta;
-        handleInput(delta);
 
-        // Smoothly move towards pointer control
-        state.player.y += (pointerY - state.player.y) * 0.18;
+        // Smoothly move towards pointer control with speed cap
+        const playerTargetDistance = pointerY - state.player.y;
+        const playerMoveDistance = Math.sign(playerTargetDistance) * Math.min(Math.abs(playerTargetDistance) * 0.18, 800 * delta);
+        state.player.y += playerMoveDistance;
 
         const ball = state.ball;
+        
+        // Gradually increase ball speed over time during rallies
+        const ballRallyTime = state.time - state.rallyStartTime;
+        const speedIncrease = Math.min(1.5, ballRallyTime * 0.1); // Max 50% speed increase
+        const currentMaxSpeed = config.maxBallSpeed + speedIncrease;
+        const currentBaseSpeed = config.baseBallSpeed + speedIncrease * 0.5;
+        
         ball.x += ball.vx;
         ball.y += ball.vy;
 
@@ -203,15 +268,56 @@
         ) {
           const relative = (ball.y - (state.player.y + config.paddleHeight / 2)) / (config.paddleHeight / 2);
           ball.vx = Math.abs(ball.vx) * 1.05;
-          ball.vx = clamp(ball.vx, 6, config.maxBallSpeed);
-          ball.vy = relative * config.maxBallSpeed * 0.7;
+          ball.vx = clamp(ball.vx, currentBaseSpeed, currentMaxSpeed);
+          ball.vy = relative * currentMaxSpeed * 0.7;
           addParticles(ball.x, ball.y, "rgba(255, 0, 170, 0.75)");
         }
 
-        // AI paddle movement
+        // AI paddle movement with fatigue system
+        const rallyTime = state.time - state.rallyStartTime;
+        // Accumulate fatigue over time during the rally (slower decay)
+        state.aiFatigue = Math.min(1, rallyTime * 0.08);
+        
+        // Calculate speed based on fatigue - starts fast, gets slower
+        const baseSpeed = 800 * delta; // Higher base speed
+        const speedDecay = state.aiFatigue * 0.7; // Up to 70% speed reduction
+        const maxSpeed = baseSpeed * (1 - speedDecay);
+        
+        // Add some intentional delay based on fatigue
+        const fatigueDelay = state.aiFatigue * 0.5;
+        const adjustedLag = config.aiLag + fatigueDelay;
+        
         const targetY = ball.y - config.paddleHeight / 2 + Math.sin(state.time * 1.7) * 35;
-        state.ai.y += (targetY - state.ai.y) * config.aiLag;
+        const targetDistance = targetY - state.ai.y;
+        const moveDistance = Math.sign(targetDistance) * Math.min(Math.abs(targetDistance) * adjustedLag, maxSpeed);
+        state.ai.y += moveDistance;
         state.ai.y = clamp(state.ai.y, 20, canvas.height - config.paddleHeight - 20);
+
+        // Wind tunnel system
+        
+        // Check if we should spawn a new wind tunnel
+        const timeSinceLastWind = state.time - state.lastWindTunnelTime;
+        const windSpawnChance = Math.min(0.3, rallyTime * 0.02); // Increases with rally time
+        
+        if (!state.windTunnel.active && timeSinceLastWind > 3 && Math.random() < windSpawnChance) {
+          state.windTunnel.active = true;
+          state.windTunnel.startTime = state.time;
+          state.windTunnel.direction = Math.random() < 0.5 ? 1 : -1;
+          state.windTunnel.strength = 0.2 + Math.random() * 0.5;
+          state.windTunnel.x = canvas.width * 0.33 + Math.random() * (canvas.width * 0.34); // 1/3 to 2/3 of board
+          state.lastWindTunnelTime = state.time;
+        }
+        
+        // Check if wind tunnel should end (5 seconds duration)
+        if (state.windTunnel.active && state.time - state.windTunnel.startTime > 5) {
+          state.windTunnel.active = false;
+        }
+        
+        // Apply wind tunnel effect to ball when in wind tunnel area
+        if (state.windTunnel.active && ball.x > state.windTunnel.x - 60 && ball.x < state.windTunnel.x + 60) {
+          const windForce = state.windTunnel.strength * state.windTunnel.direction * delta * 40;
+          ball.vy += windForce;
+        }
 
         // AI paddle collision
         if (
@@ -222,8 +328,8 @@
         ) {
           const relative = (ball.y - (state.ai.y + config.paddleHeight / 2)) / (config.paddleHeight / 2);
           ball.vx = -Math.abs(ball.vx) * 1.05;
-          ball.vx = clamp(ball.vx, -config.maxBallSpeed, -6);
-          ball.vy = relative * config.maxBallSpeed * 0.75;
+          ball.vx = clamp(ball.vx, -currentMaxSpeed, -currentBaseSpeed);
+          ball.vy = relative * currentMaxSpeed * 0.75;
           addParticles(ball.x, ball.y, "rgba(0, 220, 255, 0.75)");
         }
 
@@ -325,15 +431,61 @@
         }
       }
 
+      function drawWindTunnel() {
+        if (!state.windTunnel.active) return;
+        
+        ctx.save();
+        
+        // Create wind tunnel visual effect
+        const tunnelX = state.windTunnel.x;
+        const tunnelWidth = 120;
+        const tunnelHeight = canvas.height;
+        const windAge = state.time - state.windTunnel.startTime;
+        const alpha = Math.sin(windAge * 3) * 0.3 + 0.4; // Pulsing effect
+        
+        // Draw wind tunnel area
+        const gradient = ctx.createLinearGradient(tunnelX - tunnelWidth/2, 0, tunnelX + tunnelWidth/2, 0);
+        if (state.windTunnel.direction > 0) {
+          gradient.addColorStop(0, `rgba(0, 255, 255, ${alpha * 0.2})`);
+          gradient.addColorStop(1, `rgba(0, 255, 255, ${alpha * 0.6})`);
+        } else {
+          gradient.addColorStop(0, `rgba(255, 100, 255, ${alpha * 0.6})`);
+          gradient.addColorStop(1, `rgba(255, 100, 255, ${alpha * 0.2})`);
+        }
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(tunnelX - tunnelWidth/2, 0, tunnelWidth, tunnelHeight);
+        
+        // Draw wind particles
+        for (let i = 0; i < 15; i++) {
+          const y = (state.time * 100 + i * 40) % tunnelHeight;
+          const x = tunnelX + (Math.sin(state.time * 2 + i) * 30);
+          const particleAlpha = Math.sin(state.time * 4 + i) * 0.5 + 0.5;
+          
+          ctx.fillStyle = state.windTunnel.direction > 0 
+            ? `rgba(0, 255, 255, ${particleAlpha * alpha})` 
+            : `rgba(255, 100, 255, ${particleAlpha * alpha})`;
+          ctx.beginPath();
+          ctx.arc(x, y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        
+        ctx.restore();
+      }
+
       let lastTime = performance.now();
       function loop(timestamp) {
         const delta = Math.min((timestamp - lastTime) / 1000, 0.033);
         lastTime = timestamp;
 
-        update(delta);
+        // Only update game logic if not paused
+        if (!state.paused) {
+          update(delta);
+        }
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         drawBackground(state.time);
+        drawWindTunnel();
         drawParticles();
         drawPaddle(state.player, config.paddleGlow);
         drawPaddle(state.ai, "rgba(255, 0, 255, 0.7)");
